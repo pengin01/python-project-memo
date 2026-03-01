@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 from tqdm import tqdm
+from datetime import datetime
 
 
 # =========================
@@ -398,6 +399,53 @@ def get_close(cache: Dict[str, pd.DataFrame], ticker: str, day: pd.Timestamp) ->
         return None
     return float(prev["Close"].iloc[-1])
 
+def next_market_day(market_days: pd.DatetimeIndex) -> pd.Timestamp:
+    """今日以降で最初の市場営業日（market_daysに存在する日）を返す"""
+    today = pd.Timestamp(datetime.now().date())
+    future = market_days[market_days >= today]
+    if len(future) > 0:
+        return pd.Timestamp(future[0]).normalize()
+    # データが古い等で未来が無い場合は最後の日
+    return pd.Timestamp(market_days[-1]).normalize()
+
+
+def print_today_picks(all_cand: pd.DataFrame, market_days: pd.DatetimeIndex, market_ok: pd.Series, p: Params) -> None:
+    day = next_market_day(market_days)
+    regime = "TREND" if market_ok_on(market_ok, day) else "DEFENSIVE"
+
+    today = all_cand[all_cand["entry_date"] == day].copy()
+    if today.empty:
+        print(f"\n== TODAY PICKS ==\nnext_market_day: {day.date()}  regime: {regime}\n(no entries today)")
+        return
+
+    # レジームに合う候補だけ
+    today = today[today["engine"] == regime].copy()
+    if today.empty:
+        print(f"\n== TODAY PICKS ==\nnext_market_day: {day.date()}  regime: {regime}\n(no entries for this regime)")
+        return
+
+    # スコア順（score_rankが大きいほど上位）
+    today = today.sort_values("score_rank", ascending=False)
+
+    if regime == "TREND":
+        # 手動テスト向け：最大2銘柄
+        picks = today.head(2)
+        alloc_note = "目安：2銘柄なら各50%（手動テスト向け）"
+    else:
+        # DEFENSIVE：1306だけ
+        picks = today.head(1)
+        alloc_note = "目安：1306に100%（テスト方針に合わせて）"
+
+    print(f"\n== TODAY PICKS ==\nnext_market_day: {day.date()}  regime: {regime}")
+    print(alloc_note)
+    cols = ["engine","ticker","code","name","signal_date","entry_date","exit_date","score_rank","entry_price","exit_price"]
+    cols = [c for c in cols if c in picks.columns]
+    print(picks[cols].to_string(index=False))
+
+    # 保存（手元で見返しやすい）
+    picks.to_csv("today_candidates.csv", index=False, encoding="utf-8-sig")
+    print("Saved: today_candidates.csv")
+
 
 def mtm_regime_portfolio(
     candidates: pd.DataFrame,
@@ -604,6 +652,7 @@ def main():
     for k, v in stats.items():
         print(k, v)
 
+    print_today_picks(all_cand, market_days, market_ok, P)
 
 if __name__ == "__main__":
     main()
